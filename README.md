@@ -1,161 +1,186 @@
-# 🔍 AI Log Anomaly Detection
+# AI Log Anomaly Detection
 
-An unsupervised machine learning system that detects anomalies in HDFS system logs using Isolation Forest.
+An unsupervised machine learning project for detecting anomalies in HDFS logs.
 
 [![Python](https://img.shields.io/badge/Python-3.13-blue)](https://python.org)
 [![scikit-learn](https://img.shields.io/badge/scikit--learn-latest-orange)](https://scikit-learn.org)
-[![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
----
+## Project Status
 
-## 📌 Overview
+Current version has been upgraded from a single-feature baseline to a multi-feature pipeline.
 
-This project applies **Isolation Forest** — an unsupervised anomaly detection algorithm — to identify abnormal entries in HDFS (Hadoop Distributed File System) logs. No labeled data required.
+| Item | Current Status |
+|------|----------------|
+| Dataset | HDFS_2k structured logs (2,000 rows) |
+| Main model | Isolation Forest |
+| Feature set | 7 text-derived features |
+| Config | YAML-based model configuration |
+| Extra analysis | Benchmark script for 3 algorithms |
 
-| Metric | Value |
-|--------|-------|
-| Dataset size | 2,000 log entries |
-| Anomalies detected | 91 (~4.55%) |
-| Algorithm | Isolation Forest |
-| Contamination rate | 5% |
-| Feature used | Log message content length |
+## What Is Implemented
 
----
+- Multi-feature extraction module in src/features.py
+- Config loader in src/config.py
+- Training pipeline updated in src/train.py
+- Detection pipeline updated in src/detect.py
+- Benchmark comparison in src/benchmark.py
 
-## 🗂️ Project Structure
+### Feature Set (v2)
 
-```
+The model now uses these features from log content:
+
+1. log_length
+2. word_count
+3. digit_count
+4. uppercase_ratio
+5. punctuation_count
+6. has_block_id
+7. keyword_hits
+
+## Project Structure
+
+```text
 ai-log-anomaly-detection/
 ├── configs/
-│   └── config.yaml          # Model hyperparameters & paths
+│   └── config.yaml
 ├── data/
 │   ├── raw/
-│   │   └── HDFS_2k.log_structured.csv   # Raw HDFS log data
-│   └── processed/           # Processed data (auto-generated)
+│   │   └── HDFS_2k.log_structured.csv
+│   └── processed/
 ├── models/
-│   └── anomaly_model.pkl    # Trained Isolation Forest model
+│   └── anomaly_model.pkl
 ├── notebooks/
-│   └── exploration.ipynb    # Data exploration & analysis
+│   └── exploration.ipynb
 ├── src/
 │   ├── __init__.py
-│   ├── data_loader.py       # Load & preprocess log data
-│   ├── detect.py            # Run anomaly detection
-│   ├── train.py             # Train and save model
-│   └── utils.py             # Helper functions
+│   ├── benchmark.py
+│   ├── config.py
+│   ├── data_loader.py
+│   ├── detect.py
+│   ├── features.py
+│   ├── train.py
+│   └── utils.py
 ├── requirements.txt
 └── README.md
 ```
 
----
+## Setup
 
-## ⚙️ Setup
-
-### 1. Clone the repository
+### 1) Clone and enter project
 
 ```bash
 git clone https://github.com/Ltuan126/ai-log-anomaly-detection.git
 cd ai-log-anomaly-detection
 ```
 
-### 2. Create virtual environment
+### 2) Create and activate virtual environment
 
 ```bash
 python -m venv venv
 
-# Windows
-venv\Scripts\activate
+# Windows PowerShell
+venv\Scripts\Activate.ps1
 
 # macOS / Linux
 source venv/bin/activate
 ```
 
-### 3. Install dependencies
+### 3) Install dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
----
+## Configuration
 
-## 🚀 Usage
+Configuration file: configs/config.yaml
 
-### Train the model
+```yaml
+model:
+  contamination: 0.05
+  random_state: 42
+
+data:
+  raw_path: data/raw/HDFS_2k.log_structured.csv
+  model_path: models/anomaly_model.pkl
+```
+
+## Run
+
+### 1) Train model
 
 ```bash
 python src/train.py
 ```
 
-Model will be saved to `models/anomaly_model.pkl`.
+Expected output includes model path and feature list.
 
-### Run anomaly detection
+### 2) Detect anomalies
 
 ```bash
 python src/detect.py
 ```
 
-Sample output:
+Output:
+- First 20 rows with anomaly label
+- Total anomaly count
 
-```
-   Content                                            anomaly
-0  PacketResponder 1 for block blk_38865049064139...       1
-1  PacketResponder 0 for block blk_-6952295868487...       0
-2  BLOCK* NameSystem.addStoredBlock: blockMap upd...       0
-...
+### 3) Compare algorithms (benchmark)
 
-Anomaly counts: 91
+```bash
+python src/benchmark.py
 ```
 
----
+This compares:
+- IsolationForest
+- LocalOutlierFactor
+- OneClassSVM
 
-## 🧠 How It Works
+And prints:
+- anomaly_count
+- anomaly_rate_%
+- runtime_ms
 
-```
+## How It Works
+
+```text
 Raw HDFS Logs
       ↓
-Feature Extraction (log message length)
+Feature Extraction (7 features)
       ↓
-Isolation Forest (contamination=0.05)
+Model Training / Inference
       ↓
-Anomaly Score → Label (0: Normal, 1: Anomaly)
+Anomaly Label (0: normal, 1: anomaly)
 ```
 
-**Isolation Forest** works by randomly isolating observations. Anomalous points are easier to isolate (shorter path in the tree), resulting in a lower anomaly score.
+Notes:
+- Outlier models return -1 for anomaly and 1 for normal.
+- Project maps them to 1 (anomaly) and 0 (normal).
 
----
-
-## 📦 Tech Stack
+## Tech Stack
 
 | Library | Purpose |
 |---------|---------|
-| `scikit-learn` | Isolation Forest model |
-| `pandas` | Data loading & manipulation |
-| `numpy` | Numerical computation |
-| `joblib` | Model serialization (.pkl) |
-| `pyyaml` | Config file parsing |
+| pandas | Data loading and feature processing |
+| scikit-learn | IsolationForest, LOF, OneClassSVM |
+| joblib | Model serialization |
+| pyyaml | YAML config loading |
+| numpy | Numeric operations |
 
----
+## Dataset
 
-## 🔮 Roadmap
+- Name: HDFS log dataset (structured sample)
+- Size: 2,000 rows
+- Format: CSV
+- Source: https://github.com/logpai/loghub
 
-- [ ] Add more features (log level, timestamp pattern, block ID)
-- [ ] Compare multiple algorithms (LOF, One-Class SVM, Autoencoder)
-- [ ] Track experiments with MLflow
-- [ ] Build REST API with FastAPI
-- [ ] Interactive UI with Streamlit
-- [ ] Containerize with Docker
+## Next Steps
 
----
+- Add experiment tracking (MLflow)
+- Add API layer (FastAPI)
+- Add demo UI (Streamlit)
+- Containerize with Docker
 
-## 📄 Dataset
+## Author
 
-Uses the **HDFS log dataset** — a public benchmark dataset for log-based anomaly detection.
-
-- Format: Structured CSV
-- Size: 2,000 log entries (sample)
-- Source: [Loghub](https://github.com/logpai/loghub)
-
----
-
-## 👤 Author
-
-**Ltuan126** — [github.com/Ltuan126](https://github.com/Ltuan126)
+Ltuan126
