@@ -1,0 +1,7 @@
+model:
+  contamination: 0.05
+  random_state: 42
+
+data:
+  raw_path: data/raw/HDFS_2k.log_structured.csv
+  model_path: models/anomaly_model.pkl
