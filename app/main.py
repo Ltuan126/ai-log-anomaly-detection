@@ -5,7 +5,8 @@ import logging
 import uuid
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
 from pydantic import BaseModel, Field
 
 from src.inference import predict_from_contents
@@ -37,6 +38,31 @@ project_root = Path(__file__).resolve().parent.parent
 configure_logging()
 logger = logging.getLogger("api")
 
+REQUEST_COUNTER = Counter(
+    "api_requests_total",
+    "Total API requests",
+    ["method", "path", "status_code"],
+)
+INFERENCE_REQUEST_COUNTER = Counter(
+    "inference_requests_total",
+    "Total inference requests by endpoint",
+    ["endpoint"],
+)
+INFERENCE_LATENCY_SECONDS = Histogram(
+    "inference_latency_seconds",
+    "Inference latency in seconds",
+    ["endpoint"],
+)
+ANOMALY_PREDICTIONS_TOTAL = Counter(
+    "anomaly_predictions_total",
+    "Total anomaly predictions produced by API",
+)
+BATCH_SIZE_HISTOGRAM = Histogram(
+    "batch_size",
+    "Batch size distribution for prediction endpoint",
+    buckets=(1, 2, 5, 10, 20, 50, 100, 250, 500, 1000),
+)
+
 runtime_metrics = {
     "requests_total": 0,
     "predict_requests": 0,
@@ -66,6 +92,11 @@ async def log_request_response(request: Request, call_next):
 
     elapsed_ms = round((perf_counter() - start) * 1000, 3)
     response.headers["x-request-id"] = request_id
+    REQUEST_COUNTER.labels(
+        method=request.method,
+        path=request.url.path,
+        status_code=str(response.status_code),
+    ).inc()
     logger.info(
         "Request completed",
         extra={
@@ -87,6 +118,11 @@ def health():
 
 @app.get("/metrics")
 def metrics():
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
+@app.get("/runtime-metrics")
+def runtime_stats():
     request_count = runtime_metrics["predict_requests"] + runtime_metrics["batch_predict_requests"]
     avg_ms = (runtime_metrics["total_inference_ms"] / request_count) if request_count else 0.0
     return {
@@ -99,6 +135,8 @@ def metrics():
 def predict(payload: PredictRequest):
     runtime_metrics["requests_total"] += 1
     runtime_metrics["predict_requests"] += 1
+    INFERENCE_REQUEST_COUNTER.labels(endpoint="predict").inc()
+    BATCH_SIZE_HISTOGRAM.observe(1)
     start = perf_counter()
     try:
         pred, _ = predict_from_contents([payload.content], project_root)
@@ -108,7 +146,10 @@ def predict(payload: PredictRequest):
             extra={"event": "predict_failed", "batch_size": 1},
         )
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    runtime_metrics["total_inference_ms"] += (perf_counter() - start) * 1000
+    elapsed = perf_counter() - start
+    INFERENCE_LATENCY_SECONDS.labels(endpoint="predict").observe(elapsed)
+    runtime_metrics["total_inference_ms"] += elapsed * 1000
+    ANOMALY_PREDICTIONS_TOTAL.inc(int(pred[0]))
     logger.info(
         "Prediction success",
         extra={
@@ -124,6 +165,8 @@ def predict(payload: PredictRequest):
 def predict_batch(payload: BatchPredictRequest):
     runtime_metrics["requests_total"] += 1
     runtime_metrics["batch_predict_requests"] += 1
+    INFERENCE_REQUEST_COUNTER.labels(endpoint="predict_batch").inc()
+    BATCH_SIZE_HISTOGRAM.observe(len(payload.contents))
     start = perf_counter()
     try:
         pred, anomaly_rate = predict_from_contents(payload.contents, project_root)
@@ -133,13 +176,16 @@ def predict_batch(payload: BatchPredictRequest):
             extra={"event": "predict_batch_failed", "batch_size": len(payload.contents)},
         )
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    runtime_metrics["total_inference_ms"] += (perf_counter() - start) * 1000
+    elapsed = perf_counter() - start
+    INFERENCE_LATENCY_SECONDS.labels(endpoint="predict_batch").observe(elapsed)
+    runtime_metrics["total_inference_ms"] += elapsed * 1000
 
     predictions = [
         PredictResponse(content=content, anomaly=label)
         for content, label in zip(payload.contents, pred)
     ]
     anomaly_count = sum(pred)
+    ANOMALY_PREDICTIONS_TOTAL.inc(anomaly_count)
     logger.info(
         "Batch prediction success",
         extra={
