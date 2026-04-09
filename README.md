@@ -24,6 +24,7 @@ Current version has been upgraded from a single-feature baseline to a multi-feat
 - Training pipeline updated in src/train.py
 - Detection pipeline updated in src/detect.py
 - Benchmark comparison in src/benchmark.py
+- FastAPI service with structured logs, Prometheus metrics, and live dashboard
 
 ### Feature Set (v2)
 
@@ -58,7 +59,9 @@ ai-log-anomaly-detection/
 │   ├── data_loader.py
 │   ├── detect.py
 │   ├── features.py
+│   ├── inference.py
 │   ├── train.py
+│   ├── observability.py
 │   └── utils.py
 ├── requirements.txt
 └── README.md
@@ -141,6 +144,18 @@ And prints:
 - anomaly_rate_%
 - runtime_ms
 
+### 4) Start API and monitoring dashboard
+
+```bash
+uvicorn app.main:app --reload
+```
+
+Open these endpoints:
+- `http://127.0.0.1:8000/` or `http://127.0.0.1:8000/dashboard` for the live dashboard
+- `http://127.0.0.1:8000/health` for health checks
+- `http://127.0.0.1:8000/metrics` for Prometheus scraping
+- `http://127.0.0.1:8000/runtime-metrics` for the dashboard JSON payload
+
 ## How It Works
 
 ```text
@@ -166,6 +181,8 @@ Notes:
 | joblib | Model serialization |
 | pyyaml | YAML config loading |
 | numpy | Numeric operations |
+| mlflow | Experiment tracking |
+| prometheus-client | API monitoring metrics |
 
 ## Dataset
 
