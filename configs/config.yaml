@@ -5,3 +5,8 @@ model:
 data:
   raw_path: data/raw/HDFS_2k.log_structured.csv
   model_path: models/anomaly_model.pkl
+
+mlflow:
+  tracking_uri: mlruns
+  experiment_name: log_anomaly_detection
+  run_name: isolation_forest_train
