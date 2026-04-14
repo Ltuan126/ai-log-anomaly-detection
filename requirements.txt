@@ -5,5 +5,5 @@ joblib
 pyyaml
 fastapi
 uvicorn
-mlflow
+mlflow-skinny
 prometheus-client

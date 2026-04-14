@@ -3,7 +3,6 @@ from pathlib import Path
 
 import joblib
 import mlflow
-import mlflow.sklearn
 import pandas as pd
 from sklearn.ensemble import IsolationForest
 
@@ -24,7 +23,14 @@ def main() -> None:
         random_state=config["model"]["random_state"],
     )
 
-    tracking_uri = os.getenv("MLFLOW_TRACKING_URI", str(project_root / config["mlflow"]["tracking_uri"]))
+    tracking_uri_raw = os.getenv("MLFLOW_TRACKING_URI", config["mlflow"]["tracking_uri"])
+    if "://" in tracking_uri_raw:
+        tracking_uri = tracking_uri_raw
+    else:
+        tracking_path = Path(tracking_uri_raw)
+        if not tracking_path.is_absolute():
+            tracking_path = project_root / tracking_path
+        tracking_uri = tracking_path.resolve().as_uri()
     mlflow.set_tracking_uri(tracking_uri)
     mlflow.set_experiment(config["mlflow"]["experiment_name"])
 
@@ -54,7 +60,6 @@ def main() -> None:
             }
         )
         mlflow.log_artifact(str(model_path), artifact_path="models")
-        mlflow.sklearn.log_model(model, artifact_path="sklearn-model")
 
     print(f"Model trained and saved to {model_path}")
     print(f"Features used: {', '.join(FEATURE_COLUMNS)}")
