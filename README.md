@@ -156,6 +156,21 @@ Open these endpoints:
 - `http://127.0.0.1:8000/metrics` for Prometheus scraping
 - `http://127.0.0.1:8000/runtime-metrics` for the dashboard JSON payload
 
+### 5) Start full monitoring stack (API + Prometheus + Grafana)
+
+```bash
+docker compose -f docker-compose.monitoring.yml up --build
+```
+
+Monitoring URLs:
+- `http://127.0.0.1:8000/dashboard` for the built-in real-time dashboard
+- `http://127.0.0.1:9090` for Prometheus UI
+- `http://127.0.0.1:3000` for Grafana UI (default login: `admin` / `admin`)
+
+Grafana automatically loads:
+- Prometheus datasource
+- `Log Anomaly Monitoring` dashboard
+
 ## How It Works
 
 ```text
@@ -193,10 +208,10 @@ Notes:
 
 ## Next Steps
 
-- Add experiment tracking (MLflow)
-- Add API layer (FastAPI)
-- Add demo UI (Streamlit)
-- Containerize with Docker
+- Add alerting rules (latency/error-rate/anomaly-rate thresholds)
+- Add persistent volumes for Prometheus and Grafana data
+- Add CI pipeline for lint/test/build and image publishing
+- Add request authentication and rate limiting for API endpoints
 
 ## Author
 
