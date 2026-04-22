@@ -64,6 +64,9 @@ ai-log-anomaly-detection/
 │   ├── observability.py
 │   └── utils.py
 ├── requirements.txt
+├── scripts/
+│   ├── start-mlflow-sqlite.ps1
+│   └── train-with-mlflow.ps1
 └── README.md
 ```
 
@@ -106,11 +109,44 @@ model:
 data:
   raw_path: data/raw/HDFS_2k.log_structured.csv
   model_path: models/anomaly_model.pkl
+
+mlflow:
+  tracking_uri: http://127.0.0.1:5000
+  registry_uri: ""
+  experiment_name: log_anomaly_detection
+  run_name: isolation_forest_train
+```
+
+Start MLflow tracking server (SQLite backend):
+
+```bash
+./scripts/start-mlflow-sqlite.ps1
+```
+
+Equivalent manual command:
+
+```bash
+mlflow server --backend-store-uri sqlite:///mlflow.db --default-artifact-root ./mlartifacts --host 127.0.0.1 --port 5000
 ```
 
 ## Run
 
-### 1) Train model
+### Quick start: Train with MLflow server (all-in-one)
+
+```bash
+./scripts/train-with-mlflow.ps1
+```
+
+Optional flags:
+- `-KeepServerRunning`: Keep MLflow server running after training (access at `http://127.0.0.1:5000`)
+
+### 1) Start MLflow server (required for SQLite backend)
+
+```bash
+./scripts/start-mlflow-sqlite.ps1
+```
+
+### 2) Train model
 
 ```bash
 python src/train.py
@@ -118,7 +154,7 @@ python src/train.py
 
 Expected output includes model path and feature list.
 
-### 2) Detect anomalies
+### 3) Detect anomalies
 
 ```bash
 python src/detect.py
@@ -128,7 +164,7 @@ Output:
 - First 20 rows with anomaly label
 - Total anomaly count
 
-### 3) Compare algorithms (benchmark)
+### 4) Compare algorithms (benchmark)
 
 ```bash
 python src/benchmark.py
@@ -144,7 +180,7 @@ And prints:
 - anomaly_rate_%
 - runtime_ms
 
-### 4) Start API and monitoring dashboard
+### 5) Start API and monitoring dashboard
 
 ```bash
 uvicorn app.main:app --reload
@@ -156,7 +192,7 @@ Open these endpoints:
 - `http://127.0.0.1:8000/metrics` for Prometheus scraping
 - `http://127.0.0.1:8000/runtime-metrics` for the dashboard JSON payload
 
-### 5) Start full monitoring stack (API + Prometheus + Grafana)
+### 6) Start full monitoring stack (API + Prometheus + Grafana)
 
 ```bash
 docker compose -f docker-compose.monitoring.yml up --build
