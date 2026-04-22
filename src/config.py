@@ -13,7 +13,8 @@ DEFAULT_CONFIG = {
         "model_path": "models/anomaly_model.pkl",
     },
     "mlflow": {
-        "tracking_uri": "mlruns",
+        "tracking_uri": "http://127.0.0.1:5000",
+        "registry_uri": "",
         "experiment_name": "log_anomaly_detection",
         "run_name": "isolation_forest_train",
     },
@@ -43,6 +44,7 @@ def load_config(project_root: Path) -> dict:
         },
         "mlflow": {
             "tracking_uri": mlflow_cfg.get("tracking_uri", DEFAULT_CONFIG["mlflow"]["tracking_uri"]),
+            "registry_uri": mlflow_cfg.get("registry_uri", DEFAULT_CONFIG["mlflow"]["registry_uri"]),
             "experiment_name": mlflow_cfg.get("experiment_name", DEFAULT_CONFIG["mlflow"]["experiment_name"]),
             "run_name": mlflow_cfg.get("run_name", DEFAULT_CONFIG["mlflow"]["run_name"]),
         },
