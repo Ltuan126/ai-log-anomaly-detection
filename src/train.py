@@ -1,4 +1,5 @@
 import os
+import warnings
 from pathlib import Path
 
 import joblib
@@ -10,7 +11,23 @@ from config import load_config
 from features import FEATURE_COLUMNS, extract_features
 
 
+def resolve_store_uri(project_root: Path, raw_uri: str) -> str:
+    if "://" in raw_uri:
+        return raw_uri
+
+    store_path = Path(raw_uri)
+    if not store_path.is_absolute():
+        store_path = project_root / store_path
+    return store_path.resolve().as_uri()
+
+
 def main() -> None:
+    warnings.filterwarnings(
+        "ignore",
+        message=".*filesystem tracking backend.*",
+        category=FutureWarning,
+    )
+
     project_root = Path(__file__).parent.parent
     config = load_config(project_root)
 
@@ -24,14 +41,13 @@ def main() -> None:
     )
 
     tracking_uri_raw = os.getenv("MLFLOW_TRACKING_URI", config["mlflow"]["tracking_uri"])
-    if "://" in tracking_uri_raw:
-        tracking_uri = tracking_uri_raw
-    else:
-        tracking_path = Path(tracking_uri_raw)
-        if not tracking_path.is_absolute():
-            tracking_path = project_root / tracking_path
-        tracking_uri = tracking_path.resolve().as_uri()
+    tracking_uri = resolve_store_uri(project_root, tracking_uri_raw)
     mlflow.set_tracking_uri(tracking_uri)
+
+    registry_uri_raw = os.getenv("MLFLOW_REGISTRY_URI", config["mlflow"].get("registry_uri") or tracking_uri_raw)
+    registry_uri = resolve_store_uri(project_root, registry_uri_raw)
+    mlflow.set_registry_uri(registry_uri)
+
     mlflow.set_experiment(config["mlflow"]["experiment_name"])
 
     with mlflow.start_run(run_name=config["mlflow"]["run_name"]):
@@ -64,6 +80,7 @@ def main() -> None:
     print(f"Model trained and saved to {model_path}")
     print(f"Features used: {', '.join(FEATURE_COLUMNS)}")
     print(f"MLflow tracking URI: {tracking_uri}")
+    print(f"MLflow registry URI: {registry_uri}")
 
 
 if __name__ == "__main__":
