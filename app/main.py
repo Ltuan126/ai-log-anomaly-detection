@@ -6,11 +6,14 @@ from datetime import datetime, timezone
 import uuid
 import csv
 import random
+import os
+import threading
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
 from pydantic import BaseModel, Field
+import requests as http_requests
 
 from src.inference import predict_from_contents
 from src.utils import configure_logging
@@ -40,6 +43,40 @@ app = FastAPI(title="AI Log Anomaly Detection API", version="0.1.0")
 project_root = Path(__file__).resolve().parent.parent
 configure_logging()
 logger = logging.getLogger("api")
+
+# ── Telegram alerting config ─────────────────────────────────────
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "")
+ALERT_THRESHOLD    = float(os.getenv("ALERT_THRESHOLD", "0.15"))  # 15%
+
+
+def send_telegram_alert(message: str) -> None:
+    """Fire-and-forget Telegram notification (no-op if env vars are unset)."""
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return
+    def _send():
+        try:
+            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+            http_requests.post(
+                url,
+                json={"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown"},
+                timeout=5,
+            )
+        except Exception:
+            pass
+    threading.Thread(target=_send, daemon=True).start()
+
+
+def maybe_alert(anomaly_rate: float, anomaly_count: int, total: int, source: str = "API") -> None:
+    """Send a Telegram alert if anomaly rate exceeds the configured threshold."""
+    if anomaly_rate >= ALERT_THRESHOLD:
+        msg = (
+            f"\u26a0\ufe0f *Log Anomaly Alert*\n"
+            f"Source: `{source}`\n"
+            f"Anomalies: *{anomaly_count}/{total}* ({anomaly_rate*100:.1f}%)\n"
+            f"Threshold: {ALERT_THRESHOLD*100:.0f}%"
+        )
+        send_telegram_alert(msg)
 
 REQUEST_COUNTER = Counter(
     "api_requests_total",
@@ -345,10 +382,58 @@ DASHBOARD_HTML = """
         .rate-fill   { height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--accent), var(--danger)); transition: width 0.5s ease; }
         .rate-value  { font-size: 0.8rem; font-family: 'JetBrains Mono', monospace; color: var(--text); white-space: nowrap; min-width: 46px; text-align: right; }
 
+        /* Upload */
+        .drop-zone {
+            border: 2px dashed var(--border);
+            border-radius: 14px;
+            padding: 32px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s;
+            color: var(--muted);
+        }
+        .drop-zone:hover, .drop-zone.dragging {
+            border-color: var(--accent-2);
+            background: rgba(96,165,250,0.06);
+            color: var(--text);
+        }
+        .drop-text  { font-size: 0.95rem; margin-bottom: 6px; }
+        .drop-hint  { font-size: 0.8rem; color: var(--muted); }
+        .upload-loading { display:flex; align-items:center; gap:10px; color:var(--muted); font-size:0.9rem; padding:8px 0; }
+        .upload-stats {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+        .ustat {
+            background: rgba(148,163,184,0.07);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 14px;
+            text-align: center;
+        }
+        .ustat.danger { border-color: rgba(251,113,133,0.3); background: rgba(251,113,133,0.07); }
+        .ustat.accent { border-color: rgba(110,231,183,0.3); background: rgba(110,231,183,0.07); }
+        .ustat-label { font-size: 0.78rem; color: var(--muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.04em; }
+        .ustat-val   { font-size: 1.6rem; font-weight: 700; letter-spacing: -0.03em; }
+        .ustat.danger .ustat-val { color: var(--danger); }
+        .ustat.accent .ustat-val { color: var(--accent); }
+        .anomaly-list { border: 1px solid rgba(251,113,133,0.25); border-radius: 12px; overflow: hidden; }
+        .anomaly-list-header { background: rgba(251,113,133,0.1); padding: 10px 14px; font-size: 0.85rem; color: var(--danger); }
+        .anomaly-line {
+            padding: 7px 14px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.78rem;
+            border-top: 1px solid rgba(251,113,133,0.1);
+            color: #fca5a5;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
         @media (max-width: 960px) {
             .metric, .wide { grid-column: span 12; }
             .hero { flex-direction: column; align-items: flex-start; }
             .log-entry { grid-template-columns: 76px 1fr 90px; }
+            .upload-stats { grid-template-columns: repeat(2, 1fr); }
         }
     </style>
 </head>
@@ -445,6 +530,26 @@ DASHBOARD_HTML = """
             <span class="rate-label">Session anomaly rate</span>
             <div class="rate-track"><div class="rate-fill" id="rateFill" style="width:0%"></div></div>
             <span class="rate-value" id="rateValueFooter">0.00%</span>
+        </div>
+    </section>
+
+    <!-- Upload Section -->
+    <section class="stream-section" style="margin-top:20px">
+        <div class="stream-header">
+            <div class="stream-title">
+                <span style="font-size:1.1rem">&#128193;</span>
+                Analyze Your Log File
+            </div>
+            <div style="color:var(--muted);font-size:0.85rem">Upload a <code>.log</code> / <code>.txt</code> file &mdash; each line is analyzed as a log entry</div>
+        </div>
+        <div style="padding:20px 24px">
+            <div class="drop-zone" id="dropZone">
+                <div style="font-size:2rem;margin-bottom:8px">&#128196;</div>
+                <div class="drop-text">Drop your log file here or <span style="color:var(--accent-2)">click to browse</span></div>
+                <div class="drop-hint">.log &middot; .txt &middot; .csv supported</div>
+                <input type="file" id="fileInput" accept=".log,.txt,.csv" style="display:none">
+            </div>
+            <div id="uploadResult" style="display:none;margin-top:16px"></div>
         </div>
     </section>
 
@@ -556,6 +661,59 @@ DASHBOARD_HTML = """
     }
 
     startStream();
+
+    // ── File Upload ──────────────────────────────────────────────────
+    const dropZone  = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+
+    dropZone.addEventListener('dragover',  e => { e.preventDefault(); dropZone.classList.add('dragging'); });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragging'));
+    dropZone.addEventListener('drop', e => {
+        e.preventDefault();
+        dropZone.classList.remove('dragging');
+        if (e.dataTransfer.files[0]) analyzeFile(e.dataTransfer.files[0]);
+    });
+    dropZone.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', () => { if (fileInput.files[0]) analyzeFile(fileInput.files[0]); });
+
+    async function analyzeFile(file) {
+        const result = document.getElementById('uploadResult');
+        result.style.display = 'block';
+        result.innerHTML = '<div class="upload-loading"><div class="spinner"></div><span>Analyzing ' + file.name + '...</span></div>';
+        const fd = new FormData();
+        fd.append('file', file);
+        try {
+            const res  = await fetch('/upload', { method: 'POST', body: fd });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || 'Upload failed');
+            showUploadResult(data, file.name);
+        } catch (e) {
+            result.innerHTML = `<div style="color:var(--danger);padding:16px 0">&#9888; ${e.message}</div>`;
+        }
+    }
+
+    function showUploadResult(data, filename) {
+        const result   = document.getElementById('uploadResult');
+        const rate     = (data.anomaly_rate * 100).toFixed(2);
+        const anomalies = data.predictions.filter(p => p.anomaly === 1);
+        const preview   = anomalies.slice(0, 8);
+        result.innerHTML = `
+            <div class="upload-stats">
+                <div class="ustat"><div class="ustat-label">Total lines</div><div class="ustat-val">${data.total_lines}</div></div>
+                <div class="ustat danger"><div class="ustat-label">Anomalies</div><div class="ustat-val">${data.anomaly_count}</div></div>
+                <div class="ustat"><div class="ustat-label">Anomaly rate</div><div class="ustat-val">${rate}%</div></div>
+                <div class="ustat accent"><div class="ustat-label">Normal</div><div class="ustat-val">${data.total_lines - data.anomaly_count}</div></div>
+            </div>
+            ${anomalies.length === 0
+                ? '<div style="color:var(--accent);padding:10px 0;font-size:0.9rem">&#10003; No anomalies detected in ' + filename + '</div>'
+                : `<div class="anomaly-list">
+                    <div class="anomaly-list-header">&#9888; Anomalous lines in <strong>${filename}</strong></div>
+                    ${preview.map(p => `<div class="anomaly-line">${p.line.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>`).join('')}
+                    ${anomalies.length > 8 ? `<div style="color:var(--muted);font-size:0.8rem;padding:6px 0">...and ${anomalies.length - 8} more</div>` : ''}
+                   </div>`
+            }
+        `;
+    }
 </script>
 </body>
 </html>
@@ -664,6 +822,54 @@ def demo_logs():
         ]
     sample = random.sample(logs, min(120, len(logs)))
     return {"logs": sample, "total": len(sample)}
+
+
+@app.post("/upload")
+async def upload_log_file(file: UploadFile = File(...)):
+    """Analyze every line in an uploaded log file and return a full anomaly report."""
+    raw = await file.read()
+    text  = raw.decode("utf-8", errors="ignore")
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    if not lines:
+        raise HTTPException(status_code=400, detail="File is empty or contains no valid log lines.")
+    if len(lines) > 5000:
+        raise HTTPException(status_code=400, detail="File too large — maximum 5,000 lines per upload.")
+    start = perf_counter()
+    try:
+        pred, anomaly_rate = predict_from_contents(lines, project_root)
+    except Exception as exc:
+        logger.exception("Upload prediction failed", extra={"event": "upload_failed"})
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    elapsed = perf_counter() - start
+    anomaly_count = int(sum(pred))
+    predictions   = [{"line": line, "anomaly": int(label)} for line, label in zip(lines, pred)]
+    runtime_metrics["batch_predict_requests"] += 1
+    runtime_metrics["total_inference_ms"]     += elapsed * 1000
+    runtime_metrics["last_anomaly_count"]      = anomaly_count
+    runtime_metrics["last_anomaly_rate"]       = round(anomaly_rate, 4)
+    INFERENCE_REQUEST_COUNTER.labels(endpoint="upload").inc()
+    BATCH_SIZE_HISTOGRAM.observe(len(lines))
+    ANOMALY_PREDICTIONS_TOTAL.inc(anomaly_count)
+    maybe_alert(anomaly_rate, anomaly_count, len(lines), source=file.filename or "upload")
+    logger.info(
+        "Upload analyzed",
+        extra={
+            "event": "upload_success",
+            "filename": file.filename,
+            "total_lines": len(lines),
+            "anomaly_count": anomaly_count,
+            "anomaly_rate": round(anomaly_rate, 4),
+            "inference_ms": round(elapsed * 1000, 3),
+        },
+    )
+    return {
+        "filename":     file.filename,
+        "total_lines":  len(lines),
+        "anomaly_count": anomaly_count,
+        "anomaly_rate": round(anomaly_rate, 4),
+        "inference_ms": round(elapsed * 1000, 3),
+        "predictions":  predictions,
+    }
 
 
 @app.post("/predict", response_model=PredictResponse)

@@ -7,3 +7,4 @@ fastapi
 uvicorn
 mlflow
 prometheus-client
+python-multipart
