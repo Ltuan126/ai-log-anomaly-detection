@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 import requests as http_requests
 
 from src.inference import predict_from_contents
+from src.inference_block import predict_blocks_from_lines
 from src.utils import configure_logging
 
 
@@ -443,7 +444,7 @@ DASHBOARD_HTML = """
     <section class="hero">
         <div>
             <h1 class="title">AI Log Anomaly Monitoring</h1>
-            <p class="subtitle">Real-time anomaly detection on HDFS server logs using Isolation Forest. Stream below shows live inference on actual dataset logs.</p>
+            <p class="subtitle">Block-level anomaly detection on HDFS logs (Random Forest on event-count features, F1=0.999 on held-out data). Live stream below uses a lighter per-line heuristic for the demo; upload a real log file for the validated model.</p>
         </div>
         <div class="status"><span class="pulse"></span><span id="statusText">Live</span></div>
     </section>
@@ -540,7 +541,7 @@ DASHBOARD_HTML = """
                 <span style="font-size:1.1rem">&#128193;</span>
                 Analyze Your Log File
             </div>
-            <div style="color:var(--muted);font-size:0.85rem">Upload a <code>.log</code> / <code>.txt</code> file &mdash; each line is analyzed as a log entry</div>
+            <div style="color:var(--muted);font-size:0.85rem">Upload a <code>.log</code> / <code>.txt</code> file &mdash; lines are grouped by HDFS block and each block is classified (more lines per block = more reliable)</div>
         </div>
         <div style="padding:20px 24px">
             <div class="drop-zone" id="dropZone">
@@ -695,20 +696,24 @@ DASHBOARD_HTML = """
     function showUploadResult(data, filename) {
         const result   = document.getElementById('uploadResult');
         const rate     = (data.anomaly_rate * 100).toFixed(2);
-        const anomalies = data.predictions.filter(p => p.anomaly === 1);
-        const preview   = anomalies.slice(0, 8);
+        const blocks     = data.blocks || [];
+        const anomalies  = blocks.filter(b => b.anomaly === 1)
+                                  .sort((a,b) => (b.anomaly_score ?? 0) - (a.anomaly_score ?? 0));
+        const preview    = anomalies.slice(0, 8);
+        const normalCount = data.total_blocks - data.anomaly_count;
         result.innerHTML = `
             <div class="upload-stats">
-                <div class="ustat"><div class="ustat-label">Total lines</div><div class="ustat-val">${data.total_lines}</div></div>
-                <div class="ustat danger"><div class="ustat-label">Anomalies</div><div class="ustat-val">${data.anomaly_count}</div></div>
+                <div class="ustat"><div class="ustat-label">Blocks analyzed</div><div class="ustat-val">${data.total_blocks}</div></div>
+                <div class="ustat danger"><div class="ustat-label">Anomalous blocks</div><div class="ustat-val">${data.anomaly_count}</div></div>
                 <div class="ustat"><div class="ustat-label">Anomaly rate</div><div class="ustat-val">${rate}%</div></div>
-                <div class="ustat accent"><div class="ustat-label">Normal</div><div class="ustat-val">${data.total_lines - data.anomaly_count}</div></div>
+                <div class="ustat accent"><div class="ustat-label">Normal blocks</div><div class="ustat-val">${normalCount}</div></div>
             </div>
+            <div style="color:var(--muted);font-size:0.78rem;margin-bottom:12px">${data.total_lines} lines grouped into ${data.total_blocks} blocks (block-level model, F1=0.999 on held-out data).</div>
             ${anomalies.length === 0
-                ? '<div style="color:var(--accent);padding:10px 0;font-size:0.9rem">&#10003; No anomalies detected in ' + filename + '</div>'
+                ? '<div style="color:var(--accent);padding:10px 0;font-size:0.9rem">&#10003; No anomalous blocks detected in ' + filename + '</div>'
                 : `<div class="anomaly-list">
-                    <div class="anomaly-list-header">&#9888; Anomalous lines in <strong>${filename}</strong></div>
-                    ${preview.map(p => `<div class="anomaly-line">${p.line.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>`).join('')}
+                    <div class="anomaly-list-header">&#9888; Anomalous blocks in <strong>${filename}</strong></div>
+                    ${preview.map(b => `<div class="anomaly-line">${b.block_id} &middot; ${b.n_lines} lines &middot; score ${(b.anomaly_score ?? 0).toFixed(3)}</div>`).join('')}
                     ${anomalies.length > 8 ? `<div style="color:var(--muted);font-size:0.8rem;padding:6px 0">...and ${anomalies.length - 8} more</div>` : ''}
                    </div>`
             }
@@ -826,49 +831,58 @@ def demo_logs():
 
 @app.post("/upload")
 async def upload_log_file(file: UploadFile = File(...)):
-    """Analyze every line in an uploaded log file and return a full anomaly report."""
+    """Analyze an uploaded log file at BLOCK level using the validated model
+    (F1=0.999 on held-out HDFS_v1 data, see src/evaluate_full.py) instead of
+    the old per-line heuristic. Lines are grouped by HDFS block id, matched
+    against the 29 known event templates, and each block is classified as a
+    whole -- a single line carries almost no signal on its own (see
+    src/evaluate_events.py), so more lines per block = more reliable result.
+    """
     raw = await file.read()
     text  = raw.decode("utf-8", errors="ignore")
     lines = [l.strip() for l in text.splitlines() if l.strip()]
     if not lines:
         raise HTTPException(status_code=400, detail="File is empty or contains no valid log lines.")
-    if len(lines) > 5000:
-        raise HTTPException(status_code=400, detail="File too large — maximum 5,000 lines per upload.")
+    if len(lines) > 200000:
+        raise HTTPException(status_code=400, detail="File too large — maximum 200,000 lines per upload.")
     start = perf_counter()
     try:
-        pred, anomaly_rate = predict_from_contents(lines, project_root)
+        result = predict_blocks_from_lines(lines, project_root)
     except Exception as exc:
         logger.exception("Upload prediction failed", extra={"event": "upload_failed"})
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     elapsed = perf_counter() - start
-    anomaly_count = int(sum(pred))
-    predictions   = [{"line": line, "anomaly": int(label)} for line, label in zip(lines, pred)]
+    anomaly_count = result["anomaly_block_count"]
+    anomaly_rate  = result["anomaly_rate"]
     runtime_metrics["batch_predict_requests"] += 1
     runtime_metrics["total_inference_ms"]     += elapsed * 1000
     runtime_metrics["last_anomaly_count"]      = anomaly_count
-    runtime_metrics["last_anomaly_rate"]       = round(anomaly_rate, 4)
+    runtime_metrics["last_anomaly_rate"]       = anomaly_rate
     INFERENCE_REQUEST_COUNTER.labels(endpoint="upload").inc()
     BATCH_SIZE_HISTOGRAM.observe(len(lines))
     ANOMALY_PREDICTIONS_TOTAL.inc(anomaly_count)
-    maybe_alert(anomaly_rate, anomaly_count, len(lines), source=file.filename or "upload")
+    maybe_alert(anomaly_rate, anomaly_count, result["total_blocks"] or 1, source=file.filename or "upload")
     logger.info(
         "Upload analyzed",
         extra={
             "event": "upload_success",
-            "filename": file.filename,
+            "upload_filename": file.filename,
             "total_lines": len(lines),
+            "total_blocks": result["total_blocks"],
             "anomaly_count": anomaly_count,
-            "anomaly_rate": round(anomaly_rate, 4),
+            "anomaly_rate": anomaly_rate,
             "inference_ms": round(elapsed * 1000, 3),
         },
     )
     return {
-        "filename":     file.filename,
-        "total_lines":  len(lines),
-        "anomaly_count": anomaly_count,
-        "anomaly_rate": round(anomaly_rate, 4),
-        "inference_ms": round(elapsed * 1000, 3),
-        "predictions":  predictions,
+        "filename":       file.filename,
+        "total_lines":    len(lines),
+        "lines_without_block_id": result["lines_without_block_id"],
+        "total_blocks":   result["total_blocks"],
+        "anomaly_count":  anomaly_count,
+        "anomaly_rate":   anomaly_rate,
+        "inference_ms":   round(elapsed * 1000, 3),
+        "blocks":         result["blocks"],
     }
 
 
