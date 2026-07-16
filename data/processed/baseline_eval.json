@@ -1,0 +1,13 @@
+{
+  "n_blocks_total_in_sample": 1994,
+  "n_blocks_matched_to_labels": 1994,
+  "n_true_anomaly_blocks": 68,
+  "precision": 0.08,
+  "recall": 0.1176,
+  "f1": 0.0952,
+  "roc_auc": 0.5519,
+  "true_positive": 8,
+  "false_positive": 92,
+  "true_negative": 1834,
+  "false_negative": 60
+}

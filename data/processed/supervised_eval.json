@@ -1,0 +1,30 @@
+[
+  {
+    "model": "logistic_regression",
+    "n_train": 5558,
+    "n_test": 2382,
+    "n_test_anomalies": 94,
+    "precision": 1.0,
+    "recall": 0.4468,
+    "f1": 0.6176,
+    "roc_auc": 0.7368,
+    "true_positive": 42,
+    "false_positive": 0,
+    "true_negative": 2288,
+    "false_negative": 52
+  },
+  {
+    "model": "random_forest",
+    "n_train": 5558,
+    "n_test": 2382,
+    "n_test_anomalies": 94,
+    "precision": 1.0,
+    "recall": 0.4468,
+    "f1": 0.6176,
+    "roc_auc": 0.7404,
+    "true_positive": 42,
+    "false_positive": 0,
+    "true_negative": 2288,
+    "false_negative": 52
+  }
+]
