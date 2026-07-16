@@ -3,3 +3,16 @@ __pycache__/
 mlruns/
 mlflow.db
 mlartifacts/
+
+# Large raw data dumps -- re-download HDFS_v1.zip from Zenodo and extract
+# if these are needed again (see README). Everything actually needed to
+# retrain/evaluate (Event_occurrence_matrix.csv, anomaly_label.csv,
+# HDFS.log_templates.csv, HDFS_2k.log_structured.csv) stays tracked.
+data/raw/HDFS.log
+data/raw/*.zip
+data/raw/preprocessed/Event_traces.csv
+data/raw/preprocessed/HDFS.npz
+
+# Cowork/Claude Code skills cache -- not part of this project, got copied
+# into the folder by accident, safe to delete.
+skills/
