@@ -27,16 +27,21 @@ on event-count features gets F1 = 0.999 on held-out data.
 
 ### Evaluation trail (why the model looks the way it does)
 
-Every step below is reproducible via the script listed; results are saved
-as JSON in `data/processed/`.
+Steps 1 and 5 are reproducible from a fresh clone via the script listed and
+the data covered in the "Note on `data/raw`" below. Steps 2-4 ran against an
+intermediate `HDFS_100k.log_structured.csv` sample that isn't included in the
+repo or covered by the Zenodo download instructions -- they're kept here as
+the historical record of what was tried, not as a reproducible claim.
+Results for the steps that are reproducible are saved as JSON in
+`data/processed/`.
 
-| # | Experiment | Data | Features | Model | Precision | Recall | F1 | ROC-AUC | Script |
-|---|---|---|---|---|---|---|---|---|---|
-| 1 | Baseline | HDFS_2k (2,000 lines, ~1 line/block) | 7 text features (length, digit count, ...) | IsolationForest | 0.08 | 0.118 | 0.095 | 0.55 | `src/evaluate.py` |
-| 2 | Event-count v1 | HDFS_2k | 14 event-template counts | IsolationForest | 0.12 | 0.044 | 0.065 | 0.51 | `src/evaluate_events.py` |
-| 3 | Event-count v2 | HDFS_100k (100k lines, ~13 lines/block) | event-template counts | IsolationForest | 0.376 | 0.470 | 0.418 | 0.73 | `src/evaluate_events.py` |
-| 4 | Supervised | HDFS_100k | event-template counts | Logistic Regression | 1.0 | 0.447 | 0.618 | 0.74 | `src/evaluate_supervised.py` |
-| 5 | **Full dataset** | **HDFS_v1 (575,061 blocks)** | **29 event-template counts** | **Random Forest** | **0.999** | **0.999** | **0.999** | **1.0** | `src/evaluate_full.py` |
+| # | Experiment | Data | Features | Model | Precision | Recall | F1 | ROC-AUC | Script | Reproducible? |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | Baseline | HDFS_2k (2,000 lines, ~1 line/block) | 7 text features (length, digit count, ...) | IsolationForest | 0.08 | 0.118 | 0.095 | 0.55 | `src/evaluate.py` | Yes |
+| 2 | Event-count v1 | HDFS_2k | 14 event-template counts | IsolationForest | 0.12 | 0.044 | 0.065 | 0.51 | -- | No -- historical, `evaluate_events.py` no longer runs against HDFS_2k |
+| 3 | Event-count v2 | HDFS_100k (100k lines, ~13 lines/block) | event-template counts | IsolationForest | 0.376 | 0.470 | 0.418 | 0.73 | `src/evaluate_events.py` | No -- requires `HDFS_100k.log_structured.csv`, not distributed |
+| 4 | Supervised | HDFS_100k | event-template counts | Logistic Regression | 1.0 | 0.447 | 0.618 | 0.74 | `src/evaluate_supervised.py` | No -- same HDFS_100k dependency |
+| 5 | **Full dataset** | **HDFS_v1 (575,061 blocks)** | **29 event-template counts** | **Random Forest** | **0.999** | **0.999** | **0.999** | **1.0** | `src/evaluate_full.py` | **Yes** |
 
 The jump from step 2/3 to step 5 is not a feature-engineering trick -- it's
 that HDFS_2k and HDFS_100k are small excerpts of the full log where most
@@ -260,6 +265,8 @@ Per-block anomaly label (0: normal, 1: anomaly)
 | mlflow | Experiment tracking |
 | prometheus-client | API monitoring metrics |
 | fastapi / uvicorn | API service |
+| python-multipart | File upload parsing for `/upload` |
+| requests | Telegram alert delivery |
 
 ## Dataset
 
@@ -272,7 +279,7 @@ Per-block anomaly label (0: normal, 1: anomaly)
 
 - Improve recall further (currently misses ~0.1% of anomalies at 99.9% precision) with sequence-based features (event order, not just counts) or more training data via HDFS_v2/v3
 - Give `/predict`/`/predict-batch` a documented "low confidence" flag instead of silently using the weak model
-- Add alerting rules (latency/error-rate/anomaly-rate thresholds)
+- Add latency/error-rate alerting (anomaly-rate threshold alerting to Telegram already exists — see `app/main.py`)
 - Add persistent volumes for Prometheus and Grafana data
 - Add CI pipeline for lint/test/build and image publishing
 - Add request authentication and rate limiting for API endpoints

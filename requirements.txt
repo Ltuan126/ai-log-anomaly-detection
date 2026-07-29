@@ -8,3 +8,4 @@ uvicorn
 mlflow
 prometheus-client
 python-multipart
+requests
