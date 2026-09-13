@@ -49,6 +49,8 @@ logger = logging.getLogger("api")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "")
 ALERT_THRESHOLD    = float(os.getenv("ALERT_THRESHOLD", "0.15"))  # 15%
+MAX_UPLOAD_BYTES   = int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
+ALLOWED_UPLOAD_SUFFIXES = {".log", ".txt", ".csv"}
 
 
 def send_telegram_alert(message: str) -> None:
@@ -97,6 +99,23 @@ INFERENCE_LATENCY_SECONDS = Histogram(
 ANOMALY_PREDICTIONS_TOTAL = Counter(
     "anomaly_predictions_total",
     "Total anomaly predictions produced by API",
+)
+ANALYZED_BLOCKS_TOTAL = Counter(
+    "analyzed_blocks_total",
+    "Total HDFS blocks analyzed by the validated block-level model",
+)
+ANOMALOUS_BLOCKS_TOTAL = Counter(
+    "anomalous_blocks_total",
+    "Total anomalous HDFS blocks detected by the validated model",
+)
+UNMATCHED_LOG_LINES_TOTAL = Counter(
+    "unmatched_log_lines_total",
+    "Total uploaded lines with a block id that matched no known HDFS event",
+)
+MODEL_INFERENCE_FAILURES_TOTAL = Counter(
+    "model_inference_failures_total",
+    "Total model inference failures",
+    ["endpoint"],
 )
 BATCH_SIZE_HISTOGRAM = Histogram(
     "batch_size",
@@ -838,7 +857,18 @@ async def upload_log_file(file: UploadFile = File(...)):
     whole -- a single line carries almost no signal on its own (see
     src/evaluate_events.py), so more lines per block = more reliable result.
     """
-    raw = await file.read()
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in ALLOWED_UPLOAD_SUFFIXES:
+        raise HTTPException(
+            status_code=415,
+            detail="Unsupported file type. Upload a .log, .txt, or .csv file.",
+        )
+    raw = await file.read(MAX_UPLOAD_BYTES + 1)
+    if len(raw) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large — maximum {MAX_UPLOAD_BYTES // (1024 * 1024)} MB.",
+        )
     text  = raw.decode("utf-8", errors="ignore")
     lines = [l.strip() for l in text.splitlines() if l.strip()]
     if not lines:
@@ -849,8 +879,9 @@ async def upload_log_file(file: UploadFile = File(...)):
     try:
         result = predict_blocks_from_lines(lines, project_root)
     except Exception as exc:
+        MODEL_INFERENCE_FAILURES_TOTAL.labels(endpoint="upload").inc()
         logger.exception("Upload prediction failed", extra={"event": "upload_failed"})
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(status_code=500, detail="Block-level inference failed.") from exc
     elapsed = perf_counter() - start
     anomaly_count = result["anomaly_block_count"]
     anomaly_rate  = result["anomaly_rate"]
@@ -861,6 +892,10 @@ async def upload_log_file(file: UploadFile = File(...)):
     INFERENCE_REQUEST_COUNTER.labels(endpoint="upload").inc()
     BATCH_SIZE_HISTOGRAM.observe(len(lines))
     ANOMALY_PREDICTIONS_TOTAL.inc(anomaly_count)
+    ANALYZED_BLOCKS_TOTAL.inc(result["total_blocks"])
+    ANOMALOUS_BLOCKS_TOTAL.inc(anomaly_count)
+    UNMATCHED_LOG_LINES_TOTAL.inc(result["unmatched_event_lines"])
+    INFERENCE_LATENCY_SECONDS.labels(endpoint="upload").observe(elapsed)
     maybe_alert(anomaly_rate, anomaly_count, result["total_blocks"] or 1, source=file.filename or "upload")
     logger.info(
         "Upload analyzed",
@@ -878,7 +913,14 @@ async def upload_log_file(file: UploadFile = File(...)):
         "filename":       file.filename,
         "total_lines":    len(lines),
         "lines_without_block_id": result["lines_without_block_id"],
+        "unmatched_event_lines": result["unmatched_event_lines"],
+        "matched_event_rate": result["matched_event_rate"],
         "total_blocks":   result["total_blocks"],
+        "low_context_blocks": result["low_context_blocks"],
+        "insufficient_context": result["insufficient_context"],
+        "confidence_warning": result["confidence_warning"],
+        "model_name": result["model_name"],
+        "model_version": result["model_version"],
         "anomaly_count":  anomaly_count,
         "anomaly_rate":   anomaly_rate,
         "inference_ms":   round(elapsed * 1000, 3),
@@ -886,7 +928,7 @@ async def upload_log_file(file: UploadFile = File(...)):
     }
 
 
-@app.post("/predict", response_model=PredictResponse)
+@app.post("/predict", response_model=PredictResponse, deprecated=True)
 def predict(payload: PredictRequest):
     runtime_metrics["predict_requests"] += 1
     INFERENCE_REQUEST_COUNTER.labels(endpoint="predict").inc()
@@ -895,6 +937,7 @@ def predict(payload: PredictRequest):
     try:
         pred, _ = predict_from_contents([payload.content], project_root)
     except Exception as exc:
+        MODEL_INFERENCE_FAILURES_TOTAL.labels(endpoint="predict").inc()
         logger.exception(
             "Prediction failed",
             extra={"event": "predict_failed", "batch_size": 1},
@@ -917,7 +960,7 @@ def predict(payload: PredictRequest):
     return PredictResponse(content=payload.content, anomaly=pred[0])
 
 
-@app.post("/predict-batch", response_model=BatchPredictResponse)
+@app.post("/predict-batch", response_model=BatchPredictResponse, deprecated=True)
 def predict_batch(payload: BatchPredictRequest):
     runtime_metrics["batch_predict_requests"] += 1
     INFERENCE_REQUEST_COUNTER.labels(endpoint="predict_batch").inc()
@@ -926,6 +969,7 @@ def predict_batch(payload: BatchPredictRequest):
     try:
         pred, anomaly_rate = predict_from_contents(payload.contents, project_root)
     except Exception as exc:
+        MODEL_INFERENCE_FAILURES_TOTAL.labels(endpoint="predict_batch").inc()
         logger.exception(
             "Batch prediction failed",
             extra={"event": "predict_batch_failed", "batch_size": len(payload.contents)},

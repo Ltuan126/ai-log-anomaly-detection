@@ -29,6 +29,9 @@ except ModuleNotFoundError:
 _matcher_cache = {}
 _model_cache = {}
 
+MODEL_VERSION = "hdfs-v1-rf-1"
+MIN_RECOMMENDED_LINES_PER_BLOCK = 3
+
 
 def get_matcher(project_root: Path) -> TemplateMatcher:
     key = str(project_root)
@@ -48,14 +51,18 @@ def load_block_model(project_root: Path):
                 "(requires data/raw/preprocessed/Event_occurrence_matrix.csv)."
             )
         payload = joblib.load(model_path)
-        _model_cache[key] = (payload["model"], payload["feature_columns"])
+        _model_cache[key] = (
+            payload["model"],
+            payload["feature_columns"],
+            payload.get("model_name", type(payload["model"]).__name__),
+        )
     return _model_cache[key]
 
 
 def predict_blocks_from_lines(lines: List[str], project_root: Path) -> dict:
     """Group lines by block, classify each block, return a summary + per-block results."""
     matcher = get_matcher(project_root)
-    model, feature_columns = load_block_model(project_root)
+    model, feature_columns, model_name = load_block_model(project_root)
 
     block_events = defaultdict(lambda: {col: 0 for col in feature_columns})
     block_line_count: dict = defaultdict(int)
@@ -96,12 +103,34 @@ def predict_blocks_from_lines(lines: List[str], project_root: Path) -> dict:
 
     anomaly_count = sum(b["anomaly"] for b in blocks)
     total_blocks = len(blocks)
+    matched_event_lines = max(
+        len(lines) - lines_without_block_id - unmatched_lines,
+        0,
+    )
+    lines_with_block_id = max(len(lines) - lines_without_block_id, 0)
+    matched_event_rate = (
+        matched_event_lines / lines_with_block_id if lines_with_block_id else 0.0
+    )
+    low_context_blocks = sum(
+        count < MIN_RECOMMENDED_LINES_PER_BLOCK
+        for count in block_line_count.values()
+    )
 
     return {
         "total_lines": len(lines),
         "lines_without_block_id": lines_without_block_id,
         "unmatched_event_lines": unmatched_lines,
+        "matched_event_rate": round(matched_event_rate, 4),
         "total_blocks": total_blocks,
+        "low_context_blocks": low_context_blocks,
+        "insufficient_context": bool(total_blocks and low_context_blocks == total_blocks),
+        "confidence_warning": (
+            "All detected blocks have fewer than 3 log lines; predictions may be unreliable."
+            if total_blocks and low_context_blocks == total_blocks
+            else None
+        ),
+        "model_name": model_name,
+        "model_version": MODEL_VERSION,
         "anomaly_block_count": anomaly_count,
         "anomaly_rate": round(anomaly_count / total_blocks, 4) if total_blocks else 0.0,
         "blocks": blocks,

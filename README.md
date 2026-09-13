@@ -172,6 +172,19 @@ mlflow server --backend-store-uri sqlite:///mlflow.db --default-artifact-root ./
 
 ## Run
 
+### Quick end-to-end demo
+
+The repository includes a small multi-block HDFS log sample. Run it through
+the same validated block-level pipeline used by `POST /upload`:
+
+```bash
+python scripts/demo.py
+```
+
+The JSON output includes the model name/version, per-block predictions,
+template match rate, and a warning when every block has too little lifecycle
+context for a reliable prediction.
+
 ### Reproduce the current production model (F1=0.999)
 
 ```bash
@@ -204,7 +217,19 @@ Open these endpoints:
 - `http://127.0.0.1:8000/metrics` for Prometheus scraping
 - `http://127.0.0.1:8000/runtime-metrics` for the dashboard JSON payload
 - `POST /upload` -- upload a `.log`/`.txt` file, lines are grouped by block and classified with the validated model (F1=0.999)
-- `POST /predict`, `POST /predict-batch` -- single/multiple independent lines, legacy line-level model (see limitations below)
+- `POST /predict`, `POST /predict-batch` -- deprecated legacy line-level endpoints (see limitations below)
+
+### Run automated checks
+
+```bash
+pip install -r requirements-dev.txt
+ruff check app src tests scripts/demo.py
+pytest -q
+```
+
+GitHub Actions runs the lint checks, tests, and a Docker image build on every
+pull request. The tests cover block extraction, event-template matching,
+feature construction, block inference metadata, and key API behavior.
 
 ### Start full monitoring stack (API + Prometheus + Grafana)
 

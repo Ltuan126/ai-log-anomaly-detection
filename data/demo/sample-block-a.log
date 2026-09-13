@@ -1,0 +1,4 @@
+Receiving block blk_1001 src: /10.0.0.1:50010 dest: /10.0.0.2:50010
+Received block blk_1001 src: /10.0.0.1:50010 dest: /10.0.0.2:50010 of size 67108864
+PacketResponder 1 for block blk_1001 terminating
+BLOCK* NameSystem.addStoredBlock: blockMap updated: node is added to blk_1001 size 67108864
