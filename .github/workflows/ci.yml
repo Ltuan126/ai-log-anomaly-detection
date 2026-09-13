@@ -21,7 +21,7 @@ jobs:
       - name: Lint
         run: ruff check app src tests scripts/demo.py
       - name: Test
-        run: pytest --cov=src --cov=app --cov-report=term-missing
+        run: python -m pytest --cov=src --cov=app --cov-report=term-missing
 
   docker:
     runs-on: ubuntu-latest
